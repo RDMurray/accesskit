@@ -135,6 +135,10 @@ fn deactivate_adapter(entry: &mut AdapterEntry) {
     }
 }
 
+async fn accessibility_enabled(status: &StatusProxy<'_>) -> zbus::Result<bool> {
+    Ok(status.is_enabled().await? || status.screen_reader_enabled().await?)
+}
+
 async fn run_event_loop(
     executor: &Executor<'_>,
     session_bus: Connection,
@@ -151,8 +155,10 @@ async fn run_event_loop(
     );
 
     let status = StatusProxy::new(&session_bus).await?;
-    let changes = status.receive_screen_reader_enabled_changed().await.fuse();
-    pin!(changes);
+    let is_enabled_changes = status.receive_is_enabled_changed().await.fuse();
+    pin!(is_enabled_changes);
+    let screen_reader_changes = status.receive_screen_reader_enabled_changed().await.fuse();
+    pin!(screen_reader_changes);
 
     #[cfg(not(feature = "tokio"))]
     let messages = rx.fuse();
@@ -160,15 +166,36 @@ async fn run_event_loop(
     let messages = UnboundedReceiverStream::new(rx).fuse();
     pin!(messages);
 
-    let mut atspi_bus = None;
+    let mut atspi_bus = if accessibility_enabled(&status).await? {
+        map_or_ignoring_broken_pipe(Bus::new(&session_bus, executor).await, None, Some)?
+    } else {
+        None
+    };
     let mut adapters: Vec<AdapterEntry> = Vec::new();
 
     loop {
         select! {
-            change = changes.next() => {
+            change = is_enabled_changes.next() => {
                 atspi_bus = None;
                 if let Some(change) = change {
-                    if change.get().await? {
+                    drop(change);
+                    if accessibility_enabled(&status).await? {
+                        atspi_bus = map_or_ignoring_broken_pipe(Bus::new(&session_bus, executor).await, None, Some)?;
+                    }
+                }
+                for entry in &mut adapters {
+                    if atspi_bus.is_some() {
+                        activate_adapter(entry);
+                    } else {
+                        deactivate_adapter(entry);
+                    }
+                }
+            }
+            change = screen_reader_changes.next() => {
+                atspi_bus = None;
+                if let Some(change) = change {
+                    drop(change);
+                    if accessibility_enabled(&status).await? {
                         atspi_bus = map_or_ignoring_broken_pipe(Bus::new(&session_bus, executor).await, None, Some)?;
                     }
                 }
