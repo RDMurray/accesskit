@@ -9,6 +9,8 @@ mod application;
 mod component;
 mod hyperlink;
 mod selection;
+mod table;
+mod table_cell;
 mod text;
 mod value;
 
@@ -35,5 +37,7 @@ pub(crate) use application::*;
 pub(crate) use component::*;
 pub(crate) use hyperlink::*;
 pub(crate) use selection::*;
+pub(crate) use table::*;
+pub(crate) use table_cell::*;
 pub(crate) use text::*;
 pub(crate) use value::*;

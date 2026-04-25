@@ -432,6 +432,20 @@ impl NodeWrapper<'_> {
         self.current_value().is_some()
     }
 
+    fn supports_table(&self) -> bool {
+        matches!(
+            self.0.role(),
+            Role::Grid | Role::ListGrid | Role::Table | Role::TreeGrid
+        )
+    }
+
+    fn supports_table_cell(&self) -> bool {
+        matches!(
+            self.0.role(),
+            Role::Cell | Role::ColumnHeader | Role::GridCell | Role::RowHeader
+        )
+    }
+
     pub(crate) fn interfaces(&self) -> InterfaceSet {
         let mut interfaces = InterfaceSet::new(Interface::Accessible);
         if self.supports_action() {
@@ -451,6 +465,12 @@ impl NodeWrapper<'_> {
         }
         if self.supports_value() {
             interfaces.insert(Interface::Value);
+        }
+        if self.supports_table() {
+            interfaces.insert(Interface::Table);
+        }
+        if self.supports_table_cell() {
+            interfaces.insert(Interface::TableCell);
         }
         interfaces
     }
@@ -723,6 +743,34 @@ impl PlatformNode {
         })
     }
 
+    fn resolve_for_table<F, T>(&self, f: F) -> Result<T>
+    where
+        for<'a> F: FnOnce(Node<'a>) -> Result<T>,
+    {
+        self.resolve(|node| {
+            let wrapper = NodeWrapper(&node);
+            if wrapper.supports_table() {
+                f(node)
+            } else {
+                Err(Error::UnsupportedInterface)
+            }
+        })
+    }
+
+    fn resolve_for_table_cell<F, T>(&self, f: F) -> Result<T>
+    where
+        for<'a> F: FnOnce(Node<'a>) -> Result<T>,
+    {
+        self.resolve(|node| {
+            let wrapper = NodeWrapper(&node);
+            if wrapper.supports_table_cell() {
+                f(node)
+            } else {
+                Err(Error::UnsupportedInterface)
+            }
+        })
+    }
+
     fn resolve<F, T>(&self, f: F) -> Result<T>
     where
         for<'a> F: FnOnce(Node<'a>) -> Result<T>,
@@ -954,6 +1002,20 @@ impl PlatformNode {
         })
     }
 
+    pub fn supports_table(&self) -> Result<bool> {
+        self.resolve(|node| {
+            let wrapper = NodeWrapper(&node);
+            Ok(wrapper.supports_table())
+        })
+    }
+
+    pub fn supports_table_cell(&self) -> Result<bool> {
+        self.resolve(|node| {
+            let wrapper = NodeWrapper(&node);
+            Ok(wrapper.supports_table_cell())
+        })
+    }
+
     pub fn interfaces(&self) -> Result<InterfaceSet> {
         self.resolve(|node| {
             let wrapper = NodeWrapper(&node);
@@ -1143,6 +1205,238 @@ impl PlatformNode {
 
     pub fn hyperlink_is_valid(&self) -> Result<bool> {
         self.resolve(|node| Ok(node.url().is_some()))
+    }
+
+    pub fn table_n_rows(&self) -> Result<i32> {
+        self.resolve_for_table(|node| {
+            node.data()
+                .row_count()
+                .unwrap_or_else(|| count_table_rows(node))
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)
+        })
+    }
+
+    pub fn table_n_columns(&self) -> Result<i32> {
+        self.resolve_for_table(|node| {
+            node.data()
+                .column_count()
+                .unwrap_or_else(|| count_table_columns(node))
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)
+        })
+    }
+
+    pub fn table_accessible_at(&self, row: i32, column: i32) -> Result<Option<NodeId>> {
+        let row = table_index_to_accesskit(row)?;
+        let column = table_index_to_accesskit(column)?;
+        self.resolve_for_table(|node| {
+            Ok(find_table_cell_at(node, row, column).map(|cell| cell.id()))
+        })
+    }
+
+    pub fn table_index_at(&self, row: i32, column: i32) -> Result<i32> {
+        if self.table_accessible_at(row, column)?.is_none() {
+            return Ok(-1);
+        }
+        let column_count = self.table_n_columns()?;
+        if column_count <= 0 {
+            return Ok(-1);
+        }
+        Ok(row.saturating_mul(column_count).saturating_add(column))
+    }
+
+    pub fn table_row_at_index(&self, index: i32) -> Result<i32> {
+        if index < 0 {
+            return Err(Error::IndexOutOfRange);
+        }
+        let column_count = self.table_n_columns()?;
+        if column_count <= 0 {
+            return Ok(-1);
+        }
+        Ok(index / column_count)
+    }
+
+    pub fn table_column_at_index(&self, index: i32) -> Result<i32> {
+        if index < 0 {
+            return Err(Error::IndexOutOfRange);
+        }
+        let column_count = self.table_n_columns()?;
+        if column_count <= 0 {
+            return Ok(-1);
+        }
+        Ok(index % column_count)
+    }
+
+    pub fn table_row_column_extents_at_index(
+        &self,
+        index: i32,
+    ) -> Result<(bool, i32, i32, i32, i32, bool)> {
+        let row = self.table_row_at_index(index)?;
+        let column = self.table_column_at_index(index)?;
+        let Some(cell_id) = self.table_accessible_at(row, column)? else {
+            return Ok((false, -1, -1, 0, 0, false));
+        };
+        self.resolve_for_table(|node| {
+            let Some(cell) = node.tree_state.node_by_id(cell_id) else {
+                return Ok((false, -1, -1, 0, 0, false));
+            };
+            let row_span = cell
+                .data()
+                .row_span()
+                .unwrap_or(1)
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)?;
+            let column_span = cell
+                .data()
+                .column_span()
+                .unwrap_or(1)
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)?;
+            Ok((
+                true,
+                row,
+                column,
+                row_span,
+                column_span,
+                cell.is_selected().unwrap_or(false),
+            ))
+        })
+    }
+
+    pub fn table_column_description(&self, column: i32) -> Result<String> {
+        let column = table_index_to_accesskit(column)?;
+        self.resolve_for_table(|node| {
+            Ok(find_column_header(node, column)
+                .and_then(|header| NodeWrapper(&header).name())
+                .unwrap_or_default())
+        })
+    }
+
+    pub fn table_row_description(&self, _row: i32) -> Result<String> {
+        self.resolve_for_table(|_| Ok(String::new()))
+    }
+
+    pub fn table_column_header(&self, column: i32) -> Result<Option<NodeId>> {
+        let column = table_index_to_accesskit(column)?;
+        self.resolve_for_table(
+            |node| Ok(find_column_header(node, column).map(|header| header.id())),
+        )
+    }
+
+    pub fn table_row_header(&self, row: i32) -> Result<Option<NodeId>> {
+        let row = table_index_to_accesskit(row)?;
+        self.resolve_for_table(|node| Ok(find_row_header(node, row).map(|header| header.id())))
+    }
+
+    pub fn table_selected_rows(&self) -> Result<Vec<i32>> {
+        self.resolve_for_table(|node| {
+            let mut rows = Vec::new();
+            collect_selected_rows(node, &mut rows);
+            rows.sort_unstable();
+            rows.dedup();
+            Ok(rows)
+        })
+    }
+
+    pub fn table_is_row_selected(&self, row: i32) -> Result<bool> {
+        let row = table_index_to_accesskit(row)?;
+        self.resolve_for_table(|node| Ok(is_table_row_selected(node, row)))
+    }
+
+    pub fn table_is_selected(&self, row: i32, column: i32) -> Result<bool> {
+        let Some(cell_id) = self.table_accessible_at(row, column)? else {
+            return Ok(false);
+        };
+        self.resolve_for_table(|node| {
+            Ok(node
+                .tree_state
+                .node_by_id(cell_id)
+                .and_then(|cell| cell.is_selected())
+                .unwrap_or(false))
+        })
+    }
+
+    pub fn table_cell_table(&self) -> Result<Option<NodeId>> {
+        self.resolve_for_table_cell(|node| Ok(find_ancestor_table(node).map(|table| table.id())))
+    }
+
+    pub fn table_cell_position(&self) -> Result<(i32, i32)> {
+        self.resolve_for_table_cell(|node| {
+            Ok((
+                accesskit_index_to_table(node.data().row_index()),
+                accesskit_index_to_table(node.data().column_index()),
+            ))
+        })
+    }
+
+    pub fn table_cell_row_column_span(&self) -> Result<(bool, i32, i32, i32, i32)> {
+        self.resolve_for_table_cell(|node| {
+            let row = accesskit_index_to_table(node.data().row_index());
+            let column = accesskit_index_to_table(node.data().column_index());
+            let valid = row >= 0 && column >= 0;
+            let row_span = node
+                .data()
+                .row_span()
+                .unwrap_or(1)
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)?;
+            let column_span = node
+                .data()
+                .column_span()
+                .unwrap_or(1)
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)?;
+            Ok((valid, row, column, row_span, column_span))
+        })
+    }
+
+    pub fn table_cell_row_span(&self) -> Result<i32> {
+        self.resolve_for_table_cell(|node| {
+            node.data()
+                .row_span()
+                .unwrap_or(1)
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)
+        })
+    }
+
+    pub fn table_cell_column_span(&self) -> Result<i32> {
+        self.resolve_for_table_cell(|node| {
+            node.data()
+                .column_span()
+                .unwrap_or(1)
+                .try_into()
+                .map_err(|_| Error::IndexOutOfRange)
+        })
+    }
+
+    pub fn table_cell_column_header_cells(&self) -> Result<Vec<NodeId>> {
+        self.resolve_for_table_cell(|node| {
+            let Some(column) = node.data().column_index() else {
+                return Ok(Vec::new());
+            };
+            let Some(table) = find_ancestor_table(node) else {
+                return Ok(Vec::new());
+            };
+            Ok(find_column_header(table, column)
+                .map(|header| vec![header.id()])
+                .unwrap_or_default())
+        })
+    }
+
+    pub fn table_cell_row_header_cells(&self) -> Result<Vec<NodeId>> {
+        self.resolve_for_table_cell(|node| {
+            let Some(row) = node.data().row_index() else {
+                return Ok(Vec::new());
+            };
+            let Some(table) = find_ancestor_table(node) else {
+                return Ok(Vec::new());
+            };
+            Ok(find_row_header(table, row)
+                .map(|header| vec![header.id()])
+                .unwrap_or_default())
+        })
     }
 
     pub fn n_selected_children(&self) -> Result<i32> {
@@ -1645,6 +1939,147 @@ impl Hash for PlatformNode {
         self.adapter_id.hash(state);
         self.id.hash(state);
     }
+}
+
+fn is_table_role(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Grid | Role::ListGrid | Role::Table | Role::TreeGrid
+    )
+}
+
+fn is_table_cell_role(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Cell | Role::ColumnHeader | Role::GridCell | Role::RowHeader
+    )
+}
+
+fn table_index_to_accesskit(index: i32) -> Result<usize> {
+    let index: usize = index.try_into().map_err(|_| Error::IndexOutOfRange)?;
+    index.checked_add(1).ok_or(Error::IndexOutOfRange)
+}
+
+fn accesskit_index_to_table(index: Option<usize>) -> i32 {
+    index
+        .and_then(|index| index.checked_sub(1))
+        .and_then(|index| index.try_into().ok())
+        .unwrap_or(-1)
+}
+
+fn count_table_rows(node: Node<'_>) -> usize {
+    node.filtered_children(&filter)
+        .filter_map(|child| match child.role() {
+            Role::Row => child.data().row_index(),
+            role if is_table_cell_role(role) => child.data().row_index(),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn count_table_columns(node: Node<'_>) -> usize {
+    node.filtered_children(&filter)
+        .filter_map(|child| match child.role() {
+            Role::ColumnHeader | Role::RowHeader => child.data().column_index(),
+            Role::Row => child
+                .filtered_children(&filter)
+                .filter_map(|cell| {
+                    if is_table_cell_role(cell.role()) {
+                        cell.data().column_index()
+                    } else {
+                        None
+                    }
+                })
+                .max(),
+            role if is_table_cell_role(role) => child.data().column_index(),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn find_table_cell_at(node: Node<'_>, row: usize, column: usize) -> Option<Node<'_>> {
+    for child in node.filtered_children(&filter) {
+        if is_table_cell_role(child.role())
+            && child.data().row_index() == Some(row)
+            && child.data().column_index() == Some(column)
+        {
+            return Some(child);
+        }
+        if matches!(child.role(), Role::Row | Role::RowGroup) {
+            if let Some(cell) = find_table_cell_at(child, row, column) {
+                return Some(cell);
+            }
+        }
+    }
+    None
+}
+
+fn find_column_header(node: Node<'_>, column: usize) -> Option<Node<'_>> {
+    for child in node.filtered_children(&filter) {
+        if child.role() == Role::ColumnHeader && child.data().column_index() == Some(column) {
+            return Some(child);
+        }
+        if matches!(child.role(), Role::Row | Role::RowGroup) {
+            if let Some(header) = find_column_header(child, column) {
+                return Some(header);
+            }
+        }
+    }
+    None
+}
+
+fn find_row_header(node: Node<'_>, row: usize) -> Option<Node<'_>> {
+    for child in node.filtered_children(&filter) {
+        if child.role() == Role::RowHeader && child.data().row_index() == Some(row) {
+            return Some(child);
+        }
+        if matches!(child.role(), Role::Row | Role::RowGroup) {
+            if let Some(header) = find_row_header(child, row) {
+                return Some(header);
+            }
+        }
+    }
+    None
+}
+
+fn find_ancestor_table(node: Node<'_>) -> Option<Node<'_>> {
+    let mut ancestor = node.parent();
+    while let Some(parent) = ancestor {
+        if is_table_role(parent.role()) {
+            return Some(parent);
+        }
+        ancestor = parent.parent();
+    }
+    None
+}
+
+fn collect_selected_rows(node: Node<'_>, rows: &mut Vec<i32>) {
+    for child in node.filtered_children(&filter) {
+        if child.is_selected().unwrap_or(false) {
+            if let Some(row) = child.data().row_index().and_then(|row| row.checked_sub(1)) {
+                if let Ok(row) = row.try_into() {
+                    rows.push(row);
+                }
+            }
+        }
+        if matches!(child.role(), Role::Row | Role::RowGroup) {
+            collect_selected_rows(child, rows);
+        }
+    }
+}
+
+fn is_table_row_selected(node: Node<'_>, row: usize) -> bool {
+    for child in node.filtered_children(&filter) {
+        if child.data().row_index() == Some(row) && child.is_selected().unwrap_or(false) {
+            return true;
+        }
+        if matches!(child.role(), Role::Row | Role::RowGroup) && is_table_row_selected(child, row) {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Clone)]
