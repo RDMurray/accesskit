@@ -37,8 +37,8 @@ impl ActionInterface {
         self.0.action_name(index).map_err(self.map_error())
     }
 
-    fn get_key_binding(&self, _index: i32) -> &str {
-        ""
+    fn get_key_binding(&self, index: i32) -> fdo::Result<String> {
+        self.0.action_key_binding(index).map_err(self.map_error())
     }
 
     fn get_actions(&self) -> fdo::Result<Vec<Action>> {

@@ -479,6 +479,20 @@ impl NodeWrapper<'_> {
         })
     }
 
+    fn get_action_key_binding(&self, index: i32) -> String {
+        if index != 0 || !self.0.is_clickable(&filter) {
+            return String::new();
+        }
+
+        let mnemonic = self.0.data().access_key().unwrap_or_default();
+        let shortcut = self.0.data().keyboard_shortcut().unwrap_or_default();
+        if mnemonic.is_empty() && shortcut.is_empty() {
+            return String::new();
+        }
+
+        format!("{mnemonic};;{shortcut}")
+    }
+
     fn raw_bounds_and_transform(&self) -> (Option<Rect>, Affine) {
         let state = self.0;
         (state.raw_bounds(), state.direct_transform())
@@ -961,6 +975,13 @@ impl PlatformNode {
         })
     }
 
+    pub fn action_key_binding(&self, index: i32) -> Result<String> {
+        self.resolve(|node| {
+            let wrapper = NodeWrapper(&node);
+            Ok(wrapper.get_action_key_binding(index))
+        })
+    }
+
     pub fn actions(&self) -> Result<Vec<AtspiAction>> {
         self.resolve(|node| {
             let wrapper = NodeWrapper(&node);
@@ -970,7 +991,7 @@ impl PlatformNode {
                 actions.push(AtspiAction {
                     localized_name: wrapper.get_action_name(i as i32),
                     description: "".into(),
-                    key_binding: "".into(),
+                    key_binding: wrapper.get_action_key_binding(i as i32),
                 });
             }
             Ok(actions)
