@@ -576,6 +576,15 @@ impl NodeWrapper<'_> {
     }
 
     fn notify_property_changes(&self, adapter: &Adapter, old: &NodeWrapper<'_>) {
+        let active_descendant = self.0.active_descendant().map(|node| node.id());
+        if active_descendant != old.0.active_descendant().map(|node| node.id()) {
+            if let Some(active_descendant) = active_descendant {
+                adapter.emit_object_event(
+                    self.id(),
+                    ObjectEvent::ActiveDescendantChanged(active_descendant),
+                );
+            }
+        }
         let name = self.name();
         if name != old.name() {
             let name = name.unwrap_or_default();
