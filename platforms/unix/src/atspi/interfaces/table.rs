@@ -73,12 +73,12 @@ impl TableInterface {
         0
     }
 
-    fn get_accessible_at(&self, row: i32, column: i32) -> fdo::Result<OwnedObjectAddress> {
+    fn get_accessible_at(&self, row: i32, column: i32) -> fdo::Result<(OwnedObjectAddress,)> {
         let node = self
             .node
             .table_accessible_at(row, column)
             .map_err(self.map_error())?;
-        Ok(self.node_address(node))
+        Ok((self.node_address(node),))
     }
 
     fn get_index_at(&self, row: i32, column: i32) -> fdo::Result<i32> {
@@ -135,17 +135,17 @@ impl TableInterface {
             .4)
     }
 
-    fn get_row_header(&self, row: i32) -> fdo::Result<OwnedObjectAddress> {
+    fn get_row_header(&self, row: i32) -> fdo::Result<(OwnedObjectAddress,)> {
         let node = self.node.table_row_header(row).map_err(self.map_error())?;
-        Ok(self.node_address(node))
+        Ok((self.node_address(node),))
     }
 
-    fn get_column_header(&self, column: i32) -> fdo::Result<OwnedObjectAddress> {
+    fn get_column_header(&self, column: i32) -> fdo::Result<(OwnedObjectAddress,)> {
         let node = self
             .node
             .table_column_header(column)
             .map_err(self.map_error())?;
-        Ok(self.node_address(node))
+        Ok((self.node_address(node),))
     }
 
     fn get_selected_rows(&self) -> fdo::Result<Vec<i32>> {
