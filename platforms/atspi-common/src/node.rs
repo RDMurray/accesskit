@@ -356,6 +356,9 @@ impl NodeWrapper<'_> {
 
         if self.is_focused() {
             atspi_state.insert(State::Focused);
+            if is_table_cell_role(state.role()) {
+                atspi_state.insert(State::Active);
+            }
         }
 
         atspi_state
