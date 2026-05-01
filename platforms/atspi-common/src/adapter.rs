@@ -21,6 +21,9 @@ use atspi_common::{InterfaceSet, Politeness, State};
 use std::fmt::{Debug, Formatter};
 use std::{
     collections::HashSet,
+    env,
+    fs::OpenOptions,
+    io::Write,
     sync::{
         Arc, RwLock,
         atomic::{AtomicUsize, Ordering},
@@ -497,12 +500,30 @@ impl Adapter {
     }
 
     pub(crate) fn emit_object_event(&self, target: NodeId, event: ObjectEvent) {
+        if env::var_os("SWELL_ACCESSKIT_DEBUG").is_some() {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/swell-accesskit-debug.log")
+            {
+                let _ = writeln!(file, "AT-SPI object event target={target:?} event={event:?}");
+            }
+        }
         let target = NodeIdOrRoot::Node(target);
         self.callback
             .emit_event(self, Event::Object { target, event });
     }
 
     fn emit_root_object_event(&self, event: ObjectEvent) {
+        if env::var_os("SWELL_ACCESSKIT_DEBUG").is_some() {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/swell-accesskit-debug.log")
+            {
+                let _ = writeln!(file, "AT-SPI root object event event={event:?}");
+            }
+        }
         let target = NodeIdOrRoot::Root;
         self.callback
             .emit_event(self, Event::Object { target, event });
