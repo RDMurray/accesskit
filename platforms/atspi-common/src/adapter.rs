@@ -273,7 +273,7 @@ impl<'a> AdapterChangeHandler<'a> {
 
     fn emit_selection_changed(&mut self) {
         for id in self.selection_changed.iter() {
-            if self.removed_nodes.contains(id) {
+            if self.removed_nodes.contains(id) || self.added_nodes.contains(id) {
                 continue;
             }
             self.adapter
