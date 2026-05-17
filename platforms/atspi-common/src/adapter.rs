@@ -79,7 +79,11 @@ impl<'a> AdapterChangeHandler<'a> {
             }
         }
         if let Some(true) = node.is_selected() {
-            self.enqueue_selection_changed_if_needed(node);
+            if let Some(parent) = node.selection_container(&filter)
+                && !self.added_nodes.contains(&parent.id())
+            {
+                self.enqueue_selection_changed_if_needed_parent(parent);
+            }
         }
     }
 
