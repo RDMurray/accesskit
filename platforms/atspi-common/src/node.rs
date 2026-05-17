@@ -317,6 +317,14 @@ impl NodeWrapper<'_> {
         if state.is_modal() {
             atspi_state.insert(State::Modal);
         }
+        if let Some(expanded) = state.data().is_expanded() {
+            atspi_state.insert(State::Expandable);
+            atspi_state.insert(if expanded {
+                State::Expanded
+            } else {
+                State::Collapsed
+            });
+        }
         if let Some(selected) = state.is_selected() {
             if !state.is_disabled() {
                 atspi_state.insert(State::Selectable);
@@ -372,6 +380,13 @@ impl NodeWrapper<'_> {
         self.0.position_in_set().map(|p| (p + 1).to_string())
     }
 
+    fn level(&self) -> Option<String> {
+        self.0
+            .level()
+            .and_then(|level| level.checked_add(1))
+            .map(|level| level.to_string())
+    }
+
     fn size_of_set(&self) -> Option<String> {
         self.0
             .size_of_set_from_container(&filter)
@@ -393,6 +408,9 @@ impl NodeWrapper<'_> {
         }
         if let Some(position_in_set) = self.position_in_set() {
             attributes.insert("posinset", position_in_set);
+        }
+        if let Some(level) = self.level() {
+            attributes.insert("level", level);
         }
         if let Some(size_of_set) = self.size_of_set() {
             attributes.insert("setsize", size_of_set);
