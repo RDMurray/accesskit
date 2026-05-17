@@ -111,7 +111,10 @@ impl AppContext {
     }
 
     pub(crate) fn push_adapter(&mut self, id: usize, context: &Arc<Context>) {
-        self.adapters.push((id, Arc::clone(context)));
+        match self.adapter_index(id) {
+            Ok(index) => self.adapters[index] = (id, Arc::clone(context)),
+            Err(index) => self.adapters.insert(index, (id, Arc::clone(context))),
+        }
     }
 
     pub(crate) fn remove_adapter(&mut self, id: usize) {
