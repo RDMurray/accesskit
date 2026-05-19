@@ -25,15 +25,22 @@ use std::{
 };
 
 use crate::{
-    Action as AtspiAction, Error, ObjectEvent, Property, Rect as AtspiRect, Result,
     adapter::Adapter,
     context::{AppContext, Context},
     filters::filter,
     text_attributes::ATTRIBUTE_GETTERS,
     util::*,
+    Action as AtspiAction, Error, ObjectEvent, Property, Rect as AtspiRect, Result,
 };
 
 pub(crate) struct NodeWrapper<'a>(pub(crate) &'a Node<'a>);
+
+fn role_uses_posted_mnemonic(role: Role) -> bool {
+    matches!(
+        role,
+        Role::MenuItem | Role::MenuItemCheckBox | Role::MenuItemRadio | Role::MenuListOption
+    )
+}
 
 impl NodeWrapper<'_> {
     pub(crate) fn name(&self) -> Option<String> {
@@ -506,7 +513,11 @@ impl NodeWrapper<'_> {
     }
 
     fn n_actions(&self) -> i32 {
-        if self.0.is_clickable(&filter) { 1 } else { 0 }
+        if self.0.is_clickable(&filter) {
+            1
+        } else {
+            0
+        }
     }
 
     fn get_action_name(&self, index: i32) -> String {
@@ -530,6 +541,12 @@ impl NodeWrapper<'_> {
         if mnemonic.is_empty() && shortcut.is_empty() {
             return String::new();
         }
+
+        let mnemonic = if !mnemonic.is_empty() && !role_uses_posted_mnemonic(self.0.role()) {
+            format!("<Alt>{mnemonic}")
+        } else {
+            mnemonic.to_string()
+        };
 
         format!("{mnemonic};;{shortcut}")
     }
@@ -682,6 +699,61 @@ impl NodeWrapper<'_> {
                 adapter.emit_object_event(self.id(), ObjectEvent::ChildRemoved(child));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use accesskit::{Node as LocalNode, Tree as LocalTree, TreeUpdate};
+
+    fn action_key_binding(role: Role, access_key: Option<&str>, shortcut: Option<&str>) -> String {
+        let mut root = LocalNode::new(Role::Window);
+        root.push_child(LocalNodeId(1));
+
+        let mut target = LocalNode::new(role);
+        target.add_action(Action::Click);
+        if let Some(access_key) = access_key {
+            target.set_access_key(access_key);
+        }
+        if let Some(shortcut) = shortcut {
+            target.set_keyboard_shortcut(shortcut);
+        }
+
+        let update = TreeUpdate {
+            nodes: vec![(LocalNodeId(0), root), (LocalNodeId(1), target)],
+            tree: Some(LocalTree::new(LocalNodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: LocalNodeId(0),
+        };
+        let tree = Tree::new(update, true);
+        let node = tree
+            .state()
+            .node_by_tree_local_id(LocalNodeId(1), TreeId::ROOT)
+            .unwrap();
+
+        NodeWrapper(&node).get_action_key_binding(0)
+    }
+
+    #[test]
+    fn non_menu_access_key_uses_alt_modifier() {
+        assert_eq!(
+            "<Alt>T;;",
+            action_key_binding(Role::Button, Some("T"), None)
+        );
+    }
+
+    #[test]
+    fn menu_access_key_stays_bare_posted_mnemonic() {
+        assert_eq!("F;;", action_key_binding(Role::MenuItem, Some("F"), None));
+    }
+
+    #[test]
+    fn keyboard_shortcut_stays_in_third_field() {
+        assert_eq!(
+            ";;<Control>O",
+            action_key_binding(Role::Button, None, Some("<Control>O"))
+        );
     }
 }
 
